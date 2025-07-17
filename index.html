@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ISBN QR Code Generator</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.2/font/bootstrap-icons.min.css" rel="stylesheet">
+    <style>
+        .qr-display {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .isbn-input {
+            font-family: 'Courier New', monospace;
+            letter-spacing: 1px;
+        }
+        .validation-icon {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 1.2em;
+        }
+        .input-wrapper {
+            position: relative;
+        }
+    </style>
+</head>
+<body class="bg-light">
+    <div class="container py-5">
+        <div class="row justify-content-center">
+            <div class="col-md-8 col-lg-6">
+                <div class="card shadow">
+                    <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                        <h1 class="card-title mb-0">ISBN QR Code Generator</h1>
+                        <button id="clearData" class="btn btn-outline-light btn-sm">
+                            <i class="bi bi-trash me-1"></i>Clear
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-4">
+                            <label for="isbnInput" class="form-label">Enter ISBN Number:</label>
+                            <div class="input-wrapper">
+                                <input type="text" 
+                                       class="form-control isbn-input" 
+                                       id="isbnInput" 
+                                       placeholder="978-0-123456-78-9 or 9780123456789"
+                                       maxlength="17"
+                                       autocomplete="off">
+                                <span id="validationIcon" class="validation-icon"></span>
+                            </div>
+                            <div class="form-text">Enter a 13-digit ISBN number (978 or 979 prefix)</div>
+                        </div>
+                        
+                        <div id="qrPreview" class="text-center">
+                            <h5>Scan QR Code</h5>
+                            <div class="qr-display d-inline-block mb-3">
+                                <canvas id="qrCanvas" class="border-0"></canvas>
+                            </div>
+                            <div id="isbnInfo" class="mt-3" style="display: none;">
+                                <small class="text-muted">
+                                    <div><strong>ISBN:</strong> <span id="displayIsbn"></span></div>
+                                    <div><strong>Type:</strong> <span id="isbnType"></span></div>
+                                </small>
+                            </div>
+                        </div>
+                        
+                        <div id="errorMessage" class="alert alert-danger mt-3" style="display: none;"></div>
+                        <div id="statusMessage" class="alert alert-success mt-3" style="display: none;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- QRious Library for QR Code Generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
+    
+    <script>
+        let qr = null;
+        let currentIsbn = '';
+        let debounceTimer = null;
+
+        // Initialize QR code generator
+        function initQR() {
+            const canvas = document.getElementById('qrCanvas');
+            qr = new QRious({
+                element: canvas,
+                size: 90, // 70% smaller than 300px (300 * 0.3 = 90)
+                value: '',
+                foreground: '#000000',
+                background: '#ffffff',
+                level: 'M'
+            });
+        }
+
+        // ISBN validation functions
+        function cleanIsbn(isbn) {
+            return isbn.replace(/[-\s]/g, '');
+        }
+
+        function validateIsbn13(isbn) {
+            if (isbn.length !== 13) return false;
+            if (!/^\d{13}$/.test(isbn)) return false;
+            
+            // Check if it starts with 978 or 979
+            if (!isbn.startsWith('978') && !isbn.startsWith('979')) return false;
+            
+            let sum = 0;
+            for (let i = 0; i < 12; i++) {
+                const digit = parseInt(isbn[i]);
+                sum += digit * (i % 2 === 0 ? 1 : 3);
+            }
+            
+            const checkDigit = parseInt(isbn[12]);
+            const calculatedCheck = (10 - (sum % 10)) % 10;
+            
+            return checkDigit === calculatedCheck;
+        }
+
+        function validateIsbn(isbn) {
+            const cleaned = cleanIsbn(isbn);
+            
+            if (cleaned.length === 13) {
+                return validateIsbn13(cleaned) ? { valid: true, type: 'ISBN-13', cleaned } : { valid: false };
+            } else {
+                return { valid: false };
+            }
+        }
+
+        // Event listeners
+        document.getElementById('isbnInput').addEventListener('input', function() {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(processIsbnInput, 200);
+        });
+
+        document.getElementById('isbnInput').addEventListener('focus', function() {
+            this.select(); // Select all text when clicking into the field
+        });
+
+        document.getElementById('clearData').addEventListener('click', function() {
+            clearAllData();
+        });
+
+        // Allow only digits, hyphens, and spaces for ISBN-13
+        document.getElementById('isbnInput').addEventListener('keypress', function(e) {
+            const char = e.key;
+            
+            // Allow control keys
+            if (e.ctrlKey || e.metaKey || ['Backspace', 'Delete', 'Tab', 'Enter', 'ArrowLeft', 'ArrowRight'].includes(char)) {
+                return;
+            }
+            
+            // Allow only digits, hyphens, spaces
+            if (!/[\d\-\s]/.test(char)) {
+                e.preventDefault();
+            }
+        });
+
+        function processIsbnInput() {
+            const input = document.getElementById('isbnInput').value.trim();
+            const validationIcon = document.getElementById('validationIcon');
+            const isbnInfo = document.getElementById('isbnInfo');
+            
+            if (!input) {
+                if (qr) qr.value = '';
+                validationIcon.innerHTML = '';
+                isbnInfo.style.display = 'none';
+                hideError();
+                hideStatus();
+                return;
+            }
+            
+            const validation = validateIsbn(input);
+            
+            if (validation.valid) {
+                currentIsbn = validation.cleaned;
+                
+                // Show success icon
+                validationIcon.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i>';
+                
+                // Generate QR code
+                if (qr) {
+                    qr.value = currentIsbn;
+                }
+                
+                // Show ISBN info
+                document.getElementById('displayIsbn').textContent = currentIsbn;
+                document.getElementById('isbnType').textContent = validation.type;
+                isbnInfo.style.display = 'block';
+                
+                hideError();
+                showStatus('Valid ISBN - QR code ready to scan');
+                
+                console.log('Valid ISBN generated:', currentIsbn, '(' + validation.type + ')');
+                
+            } else {
+                // Show error icon
+                validationIcon.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i>';
+                
+                // Clear QR code
+                if (qr) qr.value = '';
+                
+                isbnInfo.style.display = 'none';
+                hideStatus();
+                
+                // Show error for complete invalid ISBNs, but not while typing
+                const cleaned = cleanIsbn(input);
+                if (cleaned.length >= 13) {
+                    showError('Invalid ISBN-13 number. Please check and try again.');
+                }
+            }
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        function hideError() {
+            document.getElementById('errorMessage').style.display = 'none';
+        }
+
+        function showStatus(message) {
+            const statusDiv = document.getElementById('statusMessage');
+            statusDiv.textContent = message;
+            statusDiv.style.display = 'block';
+        }
+
+        function hideStatus() {
+            document.getElementById('statusMessage').style.display = 'none';
+        }
+
+        function clearAllData() {
+            document.getElementById('isbnInput').value = '';
+            document.getElementById('validationIcon').innerHTML = '';
+            document.getElementById('isbnInfo').style.display = 'none';
+            
+            if (qr) qr.value = '';
+            
+            hideError();
+            hideStatus();
+            
+            // Focus back to input
+            document.getElementById('isbnInput').focus();
+            
+            console.log('Data cleared');
+        }
+
+        // Initialize everything when page loads
+        window.addEventListener('load', function() {
+            console.log('Page loaded, initializing ISBN QR generator...');
+            initQR();
+            document.getElementById('isbnInput').focus();
+        });
+    </script>
+</body>
+</html>
